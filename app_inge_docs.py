@@ -9,6 +9,9 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import math
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")
 
 # ==========================================
 # ⚠️  CONFIGURACIÓN DE PÁGINA — DEBE SER
@@ -241,19 +244,43 @@ if modulo == "🏗️ 1. Análisis de Estructuras":
 
         # --- DIAGRAMA DE FUERZA CORTANTE ---
         st.subheader("📊 Diagrama de Fuerza Cortante (V)")
-        df_cortante = pd.DataFrame({
-            "Posición [m]": np.round(viga.x, 3),
-            "Cortante [kN]": np.round(viga.V, 4)
-        })
-        st.line_chart(df_cortante, x="Posición [m]", y="Cortante [kN]")
+        fig1, ax1 = plt.subplots(figsize=(10, 3))
+        ax1.plot(viga.x, viga.V, color="#1f77b4", linewidth=2)
+        ax1.fill_between(viga.x, viga.V, 0,
+                         where=(viga.V >= 0), color="#1f77b4", alpha=0.25, label="V+")
+        ax1.fill_between(viga.x, viga.V, 0,
+                         where=(viga.V <  0), color="#d62728", alpha=0.25, label="V−")
+        ax1.axhline(0, color="white", linewidth=0.8, linestyle="--")
+        ax1.set_xlabel("Posición [m]", color="white")
+        ax1.set_ylabel("Cortante [kN]", color="white")
+        ax1.tick_params(colors="white")
+        ax1.set_facecolor("#0e1117")
+        fig1.patch.set_facecolor("#0e1117")
+        for spine in ax1.spines.values():
+            spine.set_edgecolor("#444")
+        ax1.grid(True, color="#333", linestyle="--", linewidth=0.5)
+        st.pyplot(fig1)
+        plt.close(fig1)
 
         # --- DIAGRAMA DE MOMENTO FLECTOR ---
         st.subheader("📊 Diagrama de Momento Flector (M)")
-        df_momentos = pd.DataFrame({
-            "Posición [m]": np.round(viga.x, 3),
-            "Momento [kN·m]": np.round(viga.M, 4)
-        })
-        st.line_chart(df_momentos, x="Posición [m]", y="Momento [kN·m]")
+        fig2, ax2 = plt.subplots(figsize=(10, 3))
+        ax2.plot(viga.x, viga.M, color="#2ca02c", linewidth=2)
+        ax2.fill_between(viga.x, viga.M, 0,
+                         where=(viga.M >= 0), color="#2ca02c", alpha=0.25)
+        ax2.fill_between(viga.x, viga.M, 0,
+                         where=(viga.M <  0), color="#ff7f0e", alpha=0.25)
+        ax2.axhline(0, color="white", linewidth=0.8, linestyle="--")
+        ax2.set_xlabel("Posición [m]", color="white")
+        ax2.set_ylabel("Momento [kN·m]", color="white")
+        ax2.tick_params(colors="white")
+        ax2.set_facecolor("#0e1117")
+        fig2.patch.set_facecolor("#0e1117")
+        for spine in ax2.spines.values():
+            spine.set_edgecolor("#444")
+        ax2.grid(True, color="#333", linestyle="--", linewidth=0.5)
+        st.pyplot(fig2)
+        plt.close(fig2)
 
 
 # ==========================================
