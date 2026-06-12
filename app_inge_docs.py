@@ -12,6 +12,19 @@ Descripción: Aplicación web interactiva con los 4 módulos profesionales.
 """
 
 import streamlit as st
+# --- SISTEMA DE DEFENSA INGE DOCS ---
+st.title("🔒 Acceso Restringido - Inge Docs PRO")
+clave = st.text_input("Ingresa la clave maestra que viene en tu manual PDF:", type="password")
+
+if clave != "INGEDOCS-2026":
+    st.warning("⚠️ Sistema bloqueado. Adquiere tu acceso oficial para utilizar las herramientas.")
+    st.stop() # Este es el cadenero: detiene la lectura del código aquí mismo
+
+st.success("✅ ¡Acceso Autorizado! Cargando módulos de ingeniería...")
+st.divider()
+# --- FIN DEL SISTEMA DE DEFENSA ---
+
+
 import numpy as np
 import pandas as pd
 import math
