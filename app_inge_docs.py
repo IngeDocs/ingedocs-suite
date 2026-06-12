@@ -241,15 +241,19 @@ if modulo == "🏗️ 1. Análisis de Estructuras":
 
         # --- DIAGRAMA DE FUERZA CORTANTE ---
         st.subheader("📊 Diagrama de Fuerza Cortante (V)")
-        df_cortante = pd.DataFrame({"Cortante [kN]": viga.V}, index=np.round(viga.x, 3))
-        df_cortante.index.name = "x [m]"
-        st.line_chart(df_cortante)
+        df_cortante = pd.DataFrame({
+            "Posición [m]": np.round(viga.x, 3),
+            "Cortante [kN]": np.round(viga.V, 4)
+        })
+        st.line_chart(df_cortante, x="Posición [m]", y="Cortante [kN]")
 
         # --- DIAGRAMA DE MOMENTO FLECTOR ---
         st.subheader("📊 Diagrama de Momento Flector (M)")
-        df_momentos = pd.DataFrame({"Momento [kN·m]": viga.M}, index=np.round(viga.x, 3))
-        df_momentos.index.name = "x [m]"
-        st.line_chart(df_momentos)
+        df_momentos = pd.DataFrame({
+            "Posición [m]": np.round(viga.x, 3),
+            "Momento [kN·m]": np.round(viga.M, 4)
+        })
+        st.line_chart(df_momentos, x="Posición [m]", y="Momento [kN·m]")
 
 
 # ==========================================
