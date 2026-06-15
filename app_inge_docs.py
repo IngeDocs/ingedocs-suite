@@ -227,6 +227,133 @@ class CanalAbierto:
         return yc
 
 
+class VigaHiperestatica:
+    """
+    Resuelve vigas continuas / empotradas mediante el Método Matricial
+    de Rigidez (Direct Stiffness Method) para elementos viga (2 GDL/nodo:
+    deflexión v y rotación θ). Validado contra valores clásicos de libro
+    de texto (viga simplemente apoyada, viga empotrada-apoyada, viga
+    continua de 2 tramos).
+    """
+
+    def __init__(self, longitudes, EIs, tipos_apoyo):
+        self.L = longitudes
+        self.EI = EIs
+        self.tipos = tipos_apoyo          # lista ["Libre","Articulado","Empotrado"] por nodo
+        self.n_tramos = len(longitudes)
+        self.n_nodos = self.n_tramos + 1
+        self.n_dof = 2 * self.n_nodos
+        self.udls = [0.0] * self.n_tramos
+        self.puntuales = [None] * self.n_tramos   # (P, a) o None
+
+    @staticmethod
+    def _k_elem(L, EI):
+        return (EI / L**3) * np.array([
+            [12,     6*L,   -12,    6*L],
+            [6*L,  4*L**2,  -6*L,  2*L**2],
+            [-12,   -6*L,    12,   -6*L],
+            [6*L,  2*L**2,  -6*L,  4*L**2]
+        ])
+
+    @staticmethod
+    def _fef(w, L, P, a):
+        fef = np.array([w*L/2, w*L**2/12, w*L/2, -w*L**2/12])
+        if P:
+            a_e = min(max(a, 1e-6), L - 1e-6)
+            b_e = L - a_e
+            fef = fef + np.array([
+                P*b_e**2*(L+2*a_e)/L**3,
+                P*a_e*b_e**2/L**2,
+                P*a_e**2*(L+2*b_e)/L**3,
+                -P*a_e**2*b_e/L**2
+            ])
+        return fef
+
+    def set_cargas(self, udls, puntuales):
+        self.udls = udls
+        self.puntuales = puntuales
+
+    def resolver(self):
+        n = self.n_dof
+        Kg = np.zeros((n, n))
+        fef_g = np.zeros(n)
+        elem_data = []
+
+        for i in range(self.n_tramos):
+            L, EI = self.L[i], self.EI[i]
+            w = self.udls[i]
+            P, a = self.puntuales[i] if self.puntuales[i] else (0.0, L/2)
+            Ki = self._k_elem(L, EI)
+            fefi = self._fef(w, L, P, a)
+            dofs = [2*i, 2*i+1, 2*i+2, 2*i+3]
+            for r in range(4):
+                fef_g[dofs[r]] += fefi[r]
+                for c in range(4):
+                    Kg[dofs[r], dofs[c]] += Ki[r, c]
+            elem_data.append((Ki, fefi, dofs))
+
+        restringidos = []
+        for j, tipo in enumerate(self.tipos):
+            if tipo == "Articulado":
+                restringidos.append(2*j)
+            elif tipo == "Empotrado":
+                restringidos.append(2*j)
+                restringidos.append(2*j+1)
+
+        if len(restringidos) < 2:
+            raise ValueError("Estructura inestable: agrega al menos 2 restricciones "
+                              "(por ejemplo dos apoyos articulados, o uno empotrado).")
+
+        libres = [d for d in range(n) if d not in restringidos]
+
+        Kff = Kg[np.ix_(libres, libres)]
+        Feq = -fef_g[libres]
+
+        try:
+            d_libres = np.linalg.solve(Kff, Feq)
+        except np.linalg.LinAlgError:
+            raise ValueError("Estructura inestable: revisa la configuración de apoyos.")
+
+        D = np.zeros(n)
+        D[libres] = d_libres
+
+        # Reacciones en GDL restringidos
+        R_total = Kg @ D + fef_g
+        reacciones = {dof: R_total[dof] for dof in restringidos}
+
+        # Fuerzas de extremo por elemento -> para diagramas V(x), M(x)
+        fuerzas_elem = []
+        for (Ki, fefi, dofs) in elem_data:
+            d_loc = D[dofs]
+            f_loc = Ki @ d_loc + fefi
+            fuerzas_elem.append(f_loc)
+
+        return {
+            "D": D,
+            "reacciones": reacciones,
+            "fuerzas_elem": fuerzas_elem
+        }
+
+    def diagrama(self, resultado, n_pts_por_tramo=60):
+        """Devuelve arrays globales x, V(x), M(x) a lo largo de toda la viga."""
+        x_global, V_global, M_global = [], [], []
+        x0 = 0.0
+        for i in range(self.n_tramos):
+            L = self.L[i]
+            w = self.udls[i]
+            P, a = self.puntuales[i] if self.puntuales[i] else (0.0, L/2)
+            F1, M1, _, _ = resultado["fuerzas_elem"][i]
+            xs = np.linspace(0, L, n_pts_por_tramo)
+            for x in xs:
+                V = F1 - w*x - (P if (P and x > a) else 0.0)
+                M = -M1 + F1*x - w*x**2/2 - (P*(x - a) if (P and x > a) else 0.0)
+                x_global.append(x0 + x)
+                V_global.append(V)
+                M_global.append(M)
+            x0 += L
+        return np.array(x_global), np.array(V_global), np.array(M_global)
+
+
 class TuberiaSanitaria:
     def __init__(self, diametro_m, pendiente, rugosidad):
         self.D = diametro_m
@@ -267,6 +394,7 @@ st.sidebar.markdown("---")
 modulo = st.sidebar.radio(
     "Selecciona la herramienta:",
     ("🏗️ 1. Análisis de Estructuras",
+     "🔗 5. Vigas Hiperestáticas",
      "🛣️ 2. Diseño de Carreteras",
      "🌊 3. Canales Abiertos",
      "🚰 4. Alcantarillado")
@@ -350,8 +478,202 @@ if modulo == "🏗️ 1. Análisis de Estructuras":
 
 
 # ==========================================
-# 4. MÓDULO 2 — CARRETERAS
+# 3.5 MÓDULO 5 — VIGAS HIPERESTÁTICAS
 # ==========================================
+elif modulo == "🔗 5. Vigas Hiperestáticas":
+    st.title("Vigas Continuas y Empotradas (Método de Rigidez)")
+    st.markdown(
+        "Resuelve vigas con **cualquier combinación de apoyos** (articulado, "
+        "empotrado o libre/voladizo) y **cualquier número de tramos**. "
+        "Calculado con el Método Matricial de Rigidez, el mismo enfoque "
+        "que usan los softwares profesionales."
+    )
+
+    n_tramos = st.number_input("Número de tramos:", min_value=1, max_value=6, value=2, step=1)
+    n_nodos = n_tramos + 1
+
+    st.subheader("1️⃣ Geometría y cargas por tramo")
+    longitudes, EIs, udls, puntuales = [], [], [], []
+    for i in range(int(n_tramos)):
+        st.markdown(f"**Tramo {i+1}**")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            L_i = st.number_input(f"Longitud [m]", min_value=0.5, value=5.0, key=f"L{i}")
+        with c2:
+            w_i = st.number_input(f"Carga distribuida w [kN/m]", value=0.0, key=f"w{i}")
+        with c3:
+            EI_i = st.number_input(
+                f"Rigidez relativa EI", min_value=0.01, value=1.0, key=f"EI{i}",
+                help="Si todos los tramos tienen la misma sección/material, deja 1.0. "
+                     "Solo cambia esto si algún tramo tiene una sección distinta."
+            )
+        c4, c5 = st.columns(2)
+        with c4:
+            P_i = st.number_input(f"Carga puntual P [kN]", value=0.0, key=f"P{i}")
+        with c5:
+            a_i = st.number_input(
+                f"Posición de P desde el inicio del tramo [m]",
+                min_value=0.0, max_value=float(L_i), value=float(L_i)/2, key=f"a{i}"
+            )
+        longitudes.append(L_i)
+        EIs.append(EI_i)
+        udls.append(w_i)
+        puntuales.append((P_i, a_i) if P_i != 0 else None)
+
+    st.subheader("2️⃣ Apoyos")
+    st.caption("Define el tipo de apoyo en cada nodo (un tramo tiene 2 nodos, dos tramos 3 nodos, etc.)")
+    tipos_apoyo = []
+    cols = st.columns(int(n_nodos))
+    for j in range(int(n_nodos)):
+        with cols[j]:
+            tipos_apoyo.append(
+                st.selectbox(f"Nodo {j+1}", ["Libre", "Articulado", "Empotrado"],
+                              index=1, key=f"apoyo{j}")
+            )
+
+    if st.button("Resolver Viga Hiperestática", type="primary"):
+        try:
+            viga_h = VigaHiperestatica(longitudes, EIs, tipos_apoyo)
+            viga_h.set_cargas(udls, puntuales)
+            resultado = viga_h.resolver()
+        except ValueError as e:
+            st.error(f"🚨 {e}")
+        else:
+            st.success("✅ Sistema hiperestático resuelto correctamente.")
+
+            x_acum = np.concatenate([[0], np.cumsum(longitudes)])
+            L_total = x_acum[-1]
+
+            # --- ESQUEMA DE LA VIGA ---
+            st.subheader("📐 Esquema de la Viga")
+            figs, axs = plt.subplots(figsize=(10, 2.2))
+            axs.plot([0, L_total], [0, 0], color="white", linewidth=3, zorder=2)
+
+            for j, tipo in enumerate(tipos_apoyo):
+                xj = x_acum[j]
+                if tipo == "Articulado":
+                    tri = plt.Polygon(
+                        [[xj-0.18*L_total/10, -0.35*L_total/10],
+                         [xj+0.18*L_total/10, -0.35*L_total/10],
+                         [xj, 0]],
+                        closed=True, color="#1f77b4", zorder=3
+                    )
+                    axs.add_patch(tri)
+                elif tipo == "Empotrado":
+                    axs.add_patch(plt.Rectangle(
+                        (xj-0.03*L_total/10, -0.4*L_total/10),
+                        0.06*L_total/10, 0.4*L_total/10,
+                        color="#d62728", zorder=3
+                    ))
+                    for k in range(5):
+                        yk = -0.4*L_total/10 + k*0.1*L_total/10
+                        axs.plot([xj-0.10*L_total/10, xj], [yk, yk+0.08*L_total/10],
+                                 color="#d62728", linewidth=1, zorder=3)
+
+            # cargas distribuidas
+            for i in range(int(n_tramos)):
+                if udls[i] != 0:
+                    x0, x1_ = x_acum[i], x_acum[i+1]
+                    axs.plot([x0, x1_], [0.35*L_total/10, 0.35*L_total/10],
+                             color="#2ca02c", linewidth=1)
+                    for xa in np.linspace(x0, x1_, 8):
+                        axs.annotate("", xy=(xa, 0), xytext=(xa, 0.35*L_total/10),
+                                      arrowprops=dict(arrowstyle="->", color="#2ca02c", lw=1))
+                    axs.text((x0+x1_)/2, 0.45*L_total/10, f"w={udls[i]:g} kN/m",
+                             color="#2ca02c", ha="center", fontsize=8)
+
+            # cargas puntuales
+            for i in range(int(n_tramos)):
+                if puntuales[i]:
+                    P_i, a_i = puntuales[i]
+                    xa = x_acum[i] + a_i
+                    axs.annotate("", xy=(xa, 0), xytext=(xa, 0.6*L_total/10),
+                                  arrowprops=dict(arrowstyle="->", color="#ff7f0e", lw=2))
+                    axs.text(xa, 0.68*L_total/10, f"P={P_i:g} kN",
+                             color="#ff7f0e", ha="center", fontsize=8)
+
+            axs.set_xlim(-0.5, L_total+0.5)
+            axs.set_ylim(-0.7*L_total/10, 0.85*L_total/10)
+            axs.axis("off")
+            figs.patch.set_facecolor("#0e1117")
+            st.pyplot(figs)
+            plt.close(figs)
+
+            # --- DIAGRAMAS V y M (se calculan primero para usarlos también en reacciones) ---
+            x_d, V_d, M_d = viga_h.diagrama(resultado)
+
+            # --- REACCIONES ---
+            st.subheader("📋 Reacciones en los Apoyos")
+            filas = []
+            for j, tipo in enumerate(tipos_apoyo):
+                if tipo == "Libre":
+                    continue
+                Rv = resultado["reacciones"].get(2*j, 0.0)
+                Rm = resultado["reacciones"].get(2*j+1, None)
+                if Rm is not None:
+                    # Se reporta con el mismo signo que el diagrama de Momento
+                    # (negativo = hogging / tensión en la fibra superior)
+                    if j == 0:
+                        Rm = M_d[0]
+                    elif j == int(n_nodos) - 1:
+                        Rm = M_d[-1]
+                filas.append({
+                    "Nodo": j+1,
+                    "Tipo de apoyo": tipo,
+                    "Reacción Vertical [kN]": round(Rv, 3),
+                    "Reacción Momento [kN·m]": (round(Rm, 3) if Rm is not None else "—")
+                })
+            st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+
+            r1, r2 = st.columns(2)
+            r1.metric("Cortante Máx |V|", f"{np.max(np.abs(V_d)):.2f} kN")
+            idx_mmax = np.argmax(np.abs(M_d))
+            r2.metric("Momento Máx |M|", f"{np.max(np.abs(M_d)):.2f} kN·m",
+                      help=f"Ubicado en x = {x_d[idx_mmax]:.2f} m")
+
+            st.subheader("📊 Diagrama de Fuerza Cortante (V)")
+            fig1, ax1 = plt.subplots(figsize=(10, 3))
+            ax1.plot(x_d, V_d, color="#1f77b4", linewidth=2)
+            ax1.fill_between(x_d, V_d, 0, where=(V_d >= 0), color="#1f77b4", alpha=0.25)
+            ax1.fill_between(x_d, V_d, 0, where=(V_d < 0), color="#d62728", alpha=0.25)
+            ax1.axhline(0, color="white", linewidth=0.8, linestyle="--")
+            for xj in x_acum:
+                ax1.axvline(xj, color="#555", linewidth=0.8, linestyle=":")
+            ax1.set_xlabel("Posición [m]", color="white")
+            ax1.set_ylabel("Cortante [kN]", color="white")
+            ax1.tick_params(colors="white")
+            ax1.set_facecolor("#0e1117")
+            fig1.patch.set_facecolor("#0e1117")
+            for spine in ax1.spines.values():
+                spine.set_edgecolor("#444")
+            ax1.grid(True, color="#333", linestyle="--", linewidth=0.5)
+            st.pyplot(fig1)
+            plt.close(fig1)
+
+            st.subheader("📊 Diagrama de Momento Flector (M)")
+            fig2, ax2 = plt.subplots(figsize=(10, 3))
+            ax2.plot(x_d, M_d, color="#2ca02c", linewidth=2)
+            ax2.fill_between(x_d, M_d, 0, where=(M_d >= 0), color="#2ca02c", alpha=0.25)
+            ax2.fill_between(x_d, M_d, 0, where=(M_d < 0), color="#ff7f0e", alpha=0.25)
+            ax2.axhline(0, color="white", linewidth=0.8, linestyle="--")
+            for xj in x_acum:
+                ax2.axvline(xj, color="#555", linewidth=0.8, linestyle=":")
+            ax2.set_xlabel("Posición [m]", color="white")
+            ax2.set_ylabel("Momento [kN·m]", color="white")
+            ax2.tick_params(colors="white")
+            ax2.set_facecolor("#0e1117")
+            fig2.patch.set_facecolor("#0e1117")
+            for spine in ax2.spines.values():
+                spine.set_edgecolor("#444")
+            ax2.grid(True, color="#333", linestyle="--", linewidth=0.5)
+            st.pyplot(fig2)
+            plt.close(fig2)
+
+            st.info(
+                "ℹ️ Convención: el diagrama de Momento se muestra con valores "
+                "positivos hacia arriba (zona verde) y momentos negativos "
+                "(hogging, tensión en la fibra superior) hacia abajo (zona naranja)."
+            )
 elif modulo == "🛣️ 2. Diseño de Carreteras":
     st.title("Diseño Geométrico de Curva Vertical")
     st.markdown("Genera la tabla de replanteo topográfico para curvas simétricas.")
