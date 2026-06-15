@@ -9,6 +9,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import math
+import requests
+from datetime import datetime, timezone
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
@@ -24,6 +26,63 @@ st.set_page_config(
 )
 
 # ==========================================
+# CONTROL DE CLAVES CON JSONBIN.IO
+# Cada clave tiene un límite de activaciones.
+# ==========================================
+JSONBIN_BASE = "https://api.jsonbin.io/v3/b"
+
+
+def _jsonbin_headers():
+    return {
+        "X-Master-Key": st.secrets["jsonbin"]["master_key"],
+        "Content-Type": "application/json"
+    }
+
+
+def _cargar_registro():
+    bin_id = st.secrets["jsonbin"]["bin_id"]
+    r = requests.get(f"{JSONBIN_BASE}/{bin_id}/latest", headers=_jsonbin_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json()["record"]
+
+
+def _guardar_registro(data):
+    bin_id = st.secrets["jsonbin"]["bin_id"]
+    r = requests.put(f"{JSONBIN_BASE}/{bin_id}", headers=_jsonbin_headers(), json=data, timeout=10)
+    r.raise_for_status()
+
+
+def validar_y_registrar_clave(clave):
+    """
+    Devuelve (ok: bool, mensaje: str).
+    Si la clave es válida y tiene cupo, registra el uso y permite el acceso.
+    """
+    try:
+        registro = _cargar_registro()
+    except Exception:
+        return False, "No se pudo verificar la clave (problema de conexión). Intenta de nuevo en unos segundos."
+
+    if clave not in registro:
+        return False, "Clave no encontrada. Verifica que la copiaste correctamente."
+
+    info = registro[clave]
+
+    if info.get("uses", 0) >= info.get("max_uses", 5):
+        return False, "Esta clave alcanzó su límite de activaciones. Contacta a soporte para renovarla."
+
+    info["uses"] = info.get("uses", 0) + 1
+    info.setdefault("log", []).append(datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
+    registro[clave] = info
+
+    try:
+        _guardar_registro(registro)
+    except Exception:
+        pass  # Si falla el guardado no bloqueamos el acceso, solo no queda registrado este uso.
+
+    return True, "OK"
+
+
+# ==========================================
 # SISTEMA DE ACCESO CON SESSION STATE
 # (evita re-pedir contraseña en cada clic)
 # ==========================================
@@ -35,13 +94,17 @@ if not st.session_state.auth:
     st.markdown("Ingresa la clave personal que recibiste al comprar.")
     clave = st.text_input("Clave de acceso:", type="password", placeholder="INGE-XXXX-XXXX")
     if st.button("Activar acceso", type="primary"):
-        claves_validas = st.secrets["keys"]["valid"]
-        if clave in claves_validas:
-            st.session_state.auth = True
-            st.rerun()
+        if not clave.strip():
+            st.warning("Ingresa tu clave de acceso.")
         else:
-            st.error("❌ Clave inválida o no encontrada. Verifica que la copiaste correctamente.")
+            ok, mensaje = validar_y_registrar_clave(clave.strip().upper())
+            if ok:
+                st.session_state.auth = True
+                st.rerun()
+            else:
+                st.error(f"❌ {mensaje}")
     st.stop()
+
 
 # ==========================================
 # 1. CLASES MATEMÁTICAS (EL MOTOR INVISIBLE)
