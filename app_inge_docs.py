@@ -32,12 +32,15 @@ if "auth" not in st.session_state:
 
 if not st.session_state.auth:
     st.title("🔒 Acceso Restringido — Inge Docs PRO")
-    clave = st.text_input("Ingresa la clave maestra que viene en tu manual PDF:", type="password")
-    if clave == "INGEDOCS-2026":
-        st.session_state.auth = True
-        st.rerun()
-    elif clave:
-        st.warning("⚠️ Sistema bloqueado. Adquiere tu acceso oficial para utilizar las herramientas.")
+    st.markdown("Ingresa la clave personal que recibiste al comprar.")
+    clave = st.text_input("Clave de acceso:", type="password", placeholder="INGE-XXXX-XXXX")
+    if st.button("Activar acceso", type="primary"):
+        claves_validas = st.secrets["keys"]["valid"]
+        if clave in claves_validas:
+            st.session_state.auth = True
+            st.rerun()
+        else:
+            st.error("❌ Clave inválida o no encontrada. Verifica que la copiaste correctamente.")
     st.stop()
 
 # ==========================================
